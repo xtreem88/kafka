@@ -34,14 +34,23 @@ func main() {
 		}
 		fmt.Printf("Read %d bytes from connection\n", n)
 
+		apiVersion := binary.BigEndian.Uint16(buffer[4+2 : 4+2+2])
+		fmt.Printf("Parsed API Version: %d\n", apiVersion)
+
 		correlationID := binary.BigEndian.Uint32(buffer[4+2+2 : 4+2+2+4]) // length (4) + api_key(2) + api_version(2)... correlationID is 4 byte
 		fmt.Printf("Parsed correlation ID: %d\n", correlationID)
 
-		response := make([]byte, 8)
+		response := make([]byte, 10)
 
 		binary.BigEndian.PutUint32(response[0:4], 4)
 
 		binary.BigEndian.PutUint32(response[4:8], correlationID)
+
+		if apiVersion != 0 && apiVersion != 1 && apiVersion != 2 && apiVersion != 3 && apiVersion != 4 {
+			fmt.Println("Invalid API Version, sending UNSUPPORTED_VERSION")
+			binary.BigEndian.PutUint16(response[8:10], 35)
+			fmt.Printf("===========%v\n", response)
+		}
 
 		_, err = conn.Write(response)
 		if err != nil {
@@ -55,7 +64,6 @@ func main() {
 			}
 		}
 
-		// We keep the read side of the connection open to avoid premature reset.
-		// The connection will eventually be closed when the client is done.
+		conn.Close()
 	}
 }
