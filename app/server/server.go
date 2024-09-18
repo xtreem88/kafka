@@ -10,8 +10,10 @@ import (
 type errorCode int16
 
 const (
-	NO_ERROR        errorCode = 0
-	UNKNOWN_VERSION errorCode = 35
+	NO_ERROR            errorCode = 0
+	UNKNOWN_VERSION     errorCode = 35
+	API_VERSION_REQUEST uint16    = 18
+	FETCH_REQUEST       uint16    = 1
 )
 
 // Server represents the Kafka server
@@ -90,7 +92,7 @@ func (s *Server) processMessage(conn net.Conn, messageBuf []byte) {
 	correlationID := binary.BigEndian.Uint32(messageBuf[4:8])
 	fmt.Printf("Parsed correlation ID: %d\n", correlationID)
 
-	response := s.buildResponse(apiVersion, correlationID)
+	response := s.buildResponse(apiVersion, correlationID, apiKey)
 	_, err := conn.Write(response)
 	if err != nil {
 		fmt.Println("Error writing response:", err)
@@ -99,15 +101,48 @@ func (s *Server) processMessage(conn net.Conn, messageBuf []byte) {
 }
 
 // buildResponse constructs the response to be sent back to the client
-func (s *Server) buildResponse(apiVersion uint16, correlationID uint32) []byte {
-	response := make([]byte, 4) // Placeholder for response length
+func (s *Server) buildResponse(apiVersion uint16, correlationID uint32, apiKey uint16) []byte {
+	response := []byte{}
 
-	// Append correlation ID
-	corrId := make([]byte, 4)
-	binary.BigEndian.PutUint32(corrId, correlationID)
-	response = append(response, corrId...)
+	response = binary.BigEndian.AppendUint32(response, correlationID)
 
-	// Append error code
+	if apiKey == FETCH_REQUEST {
+		response = handleFetchRequest(response)
+	} else {
+		response = handleApiVersionsRequest(apiVersion, response)
+	}
+
+	// Set the response length at the start
+	responseLength := uint32(len(response) - 4)
+
+	fmt.Printf("Sending response of length %d: %v\n", responseLength, response)
+
+	return response
+}
+
+func handleFetchRequest(response []byte) []byte {
+	// .TAG_BUFFER
+	// a delimiter for the following fields
+	response = append(response, 0)
+	// Throttle time (4 bytes)
+	response = binary.BigEndian.AppendUint32(response, 0)
+	// Error code (2 bytes)
+	// no error
+	response = binary.BigEndian.AppendUint16(response, 0)
+	// Session Id (2 bytes)
+	response = binary.BigEndian.AppendUint32(response, 0)
+	// responses field
+	// 0 elements in the response field
+	response = append(response, 0)
+	// .TAG_BUFFER
+	response = append(response, 0)
+	// Prepend the size of the response
+	size := make([]byte, 4)
+	binary.BigEndian.PutUint32(size, uint32(len(response)))
+	return append(size, response...)
+}
+
+func handleApiVersionsRequest(apiVersion uint16, response []byte) []byte {
 	errCode := make([]byte, 2)
 	if apiVersion > 4 {
 		fmt.Println("Invalid API Version, sending UNKNOWN_VERSION")
@@ -116,28 +151,31 @@ func (s *Server) buildResponse(apiVersion uint16, correlationID uint32) []byte {
 		binary.BigEndian.PutUint16(errCode, uint16(NO_ERROR))
 	}
 	response = append(response, errCode...)
-
-	// Append other response fields
-	response = append(response, 0x03) // API versions count
-
-	response = append(response, 0x00, 0x12) // API key = 18
-	response = append(response, 0x00, 0x00) // Min API version
-	response = append(response, 0x00, 0x04) // Max API version
-	response = append(response, 0x00)       // TAG_BUFFER
-
-	response = append(response, 0x00, 0x01) // API key = 1 (fetch)
-	response = append(response, 0x00, 0x00) // Min API version
-	response = append(response, 0x00, 0x10) // Max API version
-	response = append(response, 0x00)       // TAG_BUFFER
-
-	response = append(response, 0x00, 0x00, 0x00, 0x00) // Throttle time (ms)
-	response = append(response, 0x00)                   // TAG_BUFFER
-
-	// Set the response length at the start
-	responseLength := uint32(len(response) - 4)
-	binary.BigEndian.PutUint32(response[0:4], responseLength)
-
-	fmt.Printf("Sending response of length %d: %v\n", responseLength, response)
-
-	return response
+	response = append(response, 3)
+	// APIVersion API Key (2 bytes)
+	response = binary.BigEndian.AppendUint16(response, API_VERSION_REQUEST)
+	// Min Version (2 bytes)
+	response = binary.BigEndian.AppendUint16(response, 0)
+	// Max Version (2 bytes)
+	response = binary.BigEndian.AppendUint16(response, 4)
+	// .TAG_BUFFER
+	// a delimiter for the following field
+	response = append(response, 0)
+	// Fetch API Key (2 bytes)
+	response = binary.BigEndian.AppendUint16(response, FETCH_REQUEST)
+	// Min Version (2 bytes)
+	response = binary.BigEndian.AppendUint16(response, 0)
+	// Max Version (2 bytes)
+	response = binary.BigEndian.AppendUint16(response, 16)
+	// .TAG_BUFFER
+	// a delimiter for the following fields
+	response = append(response, 0)
+	// Throttle time (4 bytes)
+	response = binary.BigEndian.AppendUint32(response, 0)
+	// .TAG_BUFFER
+	response = append(response, 0)
+	// Prepend the size of the response
+	size := make([]byte, 4)
+	binary.BigEndian.PutUint32(size, uint32(len(response)))
+	return append(size, response...)
 }
